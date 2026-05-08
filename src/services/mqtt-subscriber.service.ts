@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { OpenCodeService } from './opencode.service';
 import { OpenCodeSSEService } from './opencode-sse.service';
+import { MqttMessage } from '../interfaces/mqtt-message.interface';
 
 @Injectable()
 export class MqttSubscriberService implements OnApplicationBootstrap, OnApplicationShutdown {

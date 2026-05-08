@@ -590,14 +590,14 @@ export class OpenCodeSSEService implements OnApplicationBootstrap, OnApplication
     
     this.logger.log(`Registered pending session: ${sessionID} -> ${replyToTopic}`);
     
-    // 设置超时清理
+    // 设置超时清理（300秒）
     setTimeout(() => {
       const session = this.pendingSessions.get(sessionID);
       if (session && (session.status === 'pending' || session.status === 'processing')) {
-        this.logger.warn(`Session ${sessionID} timed out after 60s`);
+        this.logger.warn(`Session ${sessionID} timed out after 300s`);
         this.sendErrorResponse(session, 'Processing timeout');
       }
-    }, 60000);
+    }, 300000);
   }
 
   /**
