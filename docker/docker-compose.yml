@@ -1,0 +1,44 @@
+services:
+  opencode-mqtt:
+    image: opencode-mqtt:latest
+    container_name: opencode-mqtt
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    environment:
+      - MQTT_HOST=${MQTT_HOST:-mqtt-broker}
+      - MQTT_PORT=${MQTT_PORT:-1883}
+      - OPENCODE_BASE_URL=${OPENCODE_BASE_URL:-http://opencode:4096}
+      - OPENCODE_WORKSPACE_DIR=${OPENCODE_WORKSPACE_DIR:-/opt/workspace}
+    volumes:
+      - ../workspace:/opt/workspace
+    depends_on:
+      opencode:
+        condition: service_healthy
+    networks:
+      - opencode-net
+
+  opencode:
+    image: ghcr.io/anomalyco/opencode:latest
+    container_name: opencode
+    restart: unless-stopped
+    command: serve --hostname 0.0.0.0 --port 4096
+    working_dir: /opt/workspace
+    environment:
+      - OPENCODE_SERVER_PASSWORD=${OPENCODE_SERVER_PASSWORD:-}
+      - OPENCODE_MODEL=${OPENCODE_MODEL:-}
+    volumes:
+      - ../workspace:/opt/workspace
+      - ../config:/home/opencode/.config/opencode
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:4096/global/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks:
+      - opencode-net
+
+networks:
+  opencode-net:
+    driver: bridge

@@ -1,176 +1,191 @@
-# NestJS MQTT Microservice with OpenCode AI Integration
+# OpenCode MQTT Service
 
-A NestJS microservice that handles MQTT message subscriptions using the built-in MQTT transport, enhanced with OpenCode AI integration for intelligent message processing.
+基于 MQTT v5.0 协议的 OpenCode AI 代理服务，接收私聊消息并通过 OpenCode AI 异步处理，将结果返回给发送方。
 
-## Features
+## 架构
 
-- Subscribes to MQTT topics using decorators (`@MessagePattern`)
-- Handles various topic patterns including wildcards (`+` and `#`)
-- Processes different types of messages (test messages, user events, sensor data, device status)
-- **NEW**: Integrated OpenCode AI for intelligent message analysis and processing
-- **NEW**: Smart notifications and anomaly detection powered by OpenCode AI
-- **NEW**: Context-aware message processing and recommendations
-
-## Prerequisites
-
-- Node.js v16 or higher
-- An MQTT broker (e.g., Mosquitto, AWS IoT, Azure IoT Hub, etc.)
-
-## Setup
-
-1. Install dependencies:
-```bash
-npm install
+```
+MQTT Client ──publish──▶ MQTT Broker ──subscribe──▶ opencode-mqtt ──promptAsync──▶ OpenCode Server
+                                                                          │
+                          MQTT Broker ◀──publish─── opencode-mqtt ◀──SSE event──┘
 ```
 
-2. Ensure EMQX broker is running:
-   Make sure your EMQX broker is running on localhost:1883.
-   If you need to use custom credentials, update the .env file accordingly.
+### 核心流程
 
-3. Configure MQTT credentials:
-   EMQX requires authentication. Update the .env file with valid credentials:
-   ```bash
-   # For default EMQX installation
-   MQTT_USERNAME=admin
-   MQTT_PASSWORD=public
-   ```
-   
-   To find your EMQX credentials or create a new user, run:
-   ```bash
-   node test-emqx-connection.js
-   ```
+1. 订阅私聊主题（如 `opencode-agent/inbound`）
+2. 收到消息后调用 OpenCode `promptAsync` API（立即返回 204）
+3. 通过 SSE 事件流监听 `message.part.delta` 累积 AI 响应
+4. 收到 `session.idle` 事件后，将汇总文本通过 MQTT 发送至 `reply_to` 主题
 
-4. Run the microservice:
-```bash
-npm run start:dev
+## 消息格式
+
+### 接收消息
+
+```typescript
+interface MqttMessage {
+  id: string;
+  text?: string;
+  senderId: string;
+  timestamp: number | string;
+  targetIds?: string[];
+  type?: 'text' | 'file';
+  fileName?: string;
+  fileType?: string;
+  fileData?: string;
+}
 ```
 
-## Configuration
+### 回复消息
 
-The microservice uses environment-based configuration management. All MQTT settings are controlled through environment variables in `.env` file.
+```typescript
+{
+  id: string;            // 消息ID
+  text: string;          // AI 响应文本
+  senderId: string;      // MQTT 客户端ID
+  kind: 'final' | 'intermediate' | 'error';
+  ts: number;            // 时间戳
+  originalMessageId: string;
+  status: 'success' | 'error';
+}
+```
 
-### Environment Variables
+### MQTT v5.0 User Properties
 
-Copy the example configuration:
+发送方在消息中需携带 `reply_to` 属性，服务据此回复：
+
+```typescript
+{
+  userProperties: {
+    reply_to: 'web-viewer/inbound',  // 回复主题
+    name: 'web-viewer',
+    // ...
+  }
+}
+```
+
+回复消息携带以下 User Properties：
+
+| 属性 | 来源 | 说明 |
+|------|------|------|
+| `name` | `MQTT_USER_PROPERTIES_NAME` | 代理名称 |
+| `description` | `MQTT_USER_PROPERTIES_DESCRIPTION` | 代理描述 |
+| `emoji` | `MQTT_USER_PROPERTIES_EMOJI` | 代理图标 |
+
+## 项目结构
+
+```
+src/
+├── main.ts                              # 入口，初始化 NestJS 应用
+├── app.module.ts                        # 根模块
+├── config/
+│   └── mqtt.config.ts                   # MQTT 及 OpenCode 配置
+├── interfaces/
+│   └── mqtt-message.interface.ts        # 消息格式定义
+└── services/
+    ├── mqtt-subscriber.service.ts       # MQTT 订阅、消息接收与路由
+    ├── opencode.service.ts              # OpenCode API 调用（创建会话、promptAsync）
+    ├── opencode-sse.service.ts          # SSE 事件监听、文本累积、MQTT 回复
+    └── opencode-integration.service.ts  # 旧版集成服务（未使用）
+```
+
+## 配置
+
+复制 `.env.example` 为 `.env` 并修改：
+
 ```bash
 cp .env.example .env
 ```
 
-Then edit the `.env` file to match your MQTT broker settings:
+### 环境变量
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `MQTT_HOST` | `localhost` | MQTT Broker 地址 |
+| `MQTT_PORT` | `1883` | MQTT Broker 端口 |
+| `MQTT_USERNAME` | - | MQTT 认证用户名 |
+| `MQTT_PASSWORD` | - | MQTT 认证密码 |
+| `MQTT_CLIENT_ID` | 随机生成 | MQTT 客户端ID，同时作为回复消息的 `senderId` |
+| `MQTT_PRIVATE_CHAT_TOPIC` | `private/chat/+` | 订阅的私聊主题 |
+| `MQTT_USER_PROPERTIES_NAME` | `nestjs-mqtt-service` | 回复消息 User Properties 的 name |
+| `MQTT_USER_PROPERTIES_DESCRIPTION` | `NestJS MQTT Microservice Client` | 回复消息 User Properties 的 description |
+| `MQTT_USER_PROPERTIES_EMOJI` | `🤖` | 回复消息 User Properties 的 emoji |
+| `OPENCODE_BASE_URL` | `http://localhost:4096` | OpenCode Server 地址 |
+| `OPENCODE_API_KEY` | - | OpenCode API 密钥 |
+| `OPENCODE_MODEL` | - | 模型，格式 `provider_id/model_id`，如 `anthropic/claude-sonnet-4-5` |
+| `OPENCODE_WORKSPACE_DIR` | `process.cwd()` | OpenCode 工作目录 |
+
+## 运行
+
+### 本地开发
 
 ```bash
-# MQTT Broker Configuration
-MQTT_HOST=your-mqtt-broker-host
-MQTT_PORT=1883
-MQTT_USERNAME=your-username
-MQTT_PASSWORD=your-password
-MQTT_CLIENT_ID=unique-client-id-for-this-service
-MQTT_CLEAN_SESSION=true
-MQTT_CONNECT_TIMEOUT=60000
-MQTT_RECONNECT_PERIOD=5000
+npm install
+npm run start:dev
 ```
 
-### Configuration Options
+### Docker 部署
 
-- `MQTT_HOST`: Address of your MQTT broker (default: localhost)
-- `MQTT_PORT`: Port number (default: 1883)
-- `MQTT_USERNAME`: Username for authentication (optional)
-- `MQTT_PASSWORD`: Password for authentication (optional)
-- `MQTT_CLIENT_ID`: Unique identifier for this client instance
-- `MQTT_CLEAN_SESSION`: Whether to use clean sessions (default: true)
-- `MQTT_CONNECT_TIMEOUT`: Timeout for connection attempts in ms (default: 60000)
-- `MQTT_RECONNECT_PERIOD`: Delay between reconnection attempts in ms (default: 5000)
-- `MQTT_USER_PROPERTIES_NAME`: Name property for MQTT v5.0 user properties (default: nestjs-mqtt-service)
-- `MQTT_USER_PROPERTIES_DESCRIPTION`: Description property for MQTT v5.0 user properties (default: NestJS MQTT Microservice Client)
-- `MQTT_USER_PROPERTIES_EMOJI`: Emoji property for MQTT v5.0 user properties (default: 🤖)
-- `MQTT_PRIVATE_CHAT_TOPIC`: Topic pattern for private chat messages (default: private/chat/+)
-
-For production environments, ensure credentials are securely managed and avoid committing sensitive information to version control.
-
-## Testing
-
-To publish test messages to the MQTT broker:
+**1. 构建镜像**
 
 ```bash
-npm run publish:test
+docker build -f docker/Dockerfile -t opencode-mqtt:latest .
 ```
 
-This will publish sample messages to different topics that the microservice subscribes to.
-
-## Topic Patterns
-
-The microservice subscribes to the following topics:
-
-- `test/topic` - Basic test messages
-- `user/events` - User login/logout events
-- `sensor/+/temperature` - Temperature readings from sensors (wildcard)
-- `device/+/status/+` - Device status updates (wildcard)
-- `private/chat/+` - Private chat messages (configured via MQTT_PRIVATE_CHAT_TOPIC)
-
-## MQTT v5.0 Features
-
-The microservice utilizes MQTT protocol version 5.0 with the following features:
-
-- **User Properties**: The client connects with custom user properties including:
-  - `name`: Service identifier
-  - `description`: Service description
-  - `emoji`: Visual representation of the service
-  
-- **Private Chat Handling**: The service subscribes to a private chat topic (default: `private/chat/+`) to receive and process private messages between clients.
-
-## Private Chat Message Processing
-
-The microservice includes a dedicated handler for private chat messages that:
-- Logs incoming private messages
-- Processes sender, recipient, and message content
-- Returns acknowledgment with processing metadata
-
-## Architecture
-
-- `main.ts` - Entry point that initializes the microservice with MQTT transport
-- `app.module.ts` - Main application module
-- `app.service.ts` - Service containing message handlers
-- `services/opencode.service.ts` - OpenCode AI integration service
-- `test-publisher.ts` - Test utility to publish messages to the broker
-- `docker-compose.yml` - Configuration to run a local MQTT broker
-
-## OpenCode AI Integration
-
-This microservice includes OpenCode AI integration to provide intelligent processing of MQTT messages:
-
-- **Message Analysis**: AI-powered analysis of MQTT messages for insights and anomaly detection
-- **Smart Notifications**: Automatic generation of contextual notifications based on message content
-- **Intelligent Routing**: Smart routing and handling of messages based on content analysis
-- **Context Awareness**: Understanding of message context for appropriate processing
-
-The integration uses the official OpenCode SDK and gracefully falls back to standard processing when the AI service is unavailable.
-
-Configuration options include:
+**2. 启动服务**
 
 ```bash
-# OpenCode Configuration
-OPENCODE_API_KEY=your-opencode-api-key-here
-OPENCODE_BASE_URL=https://api.opencode.ai
-OPENCODE_MODEL=gpt-4
+cd docker
+docker compose up -d
 ```
 
-## Troubleshooting
+**3. 查看日志**
 
-### Authentication Issues
-If you encounter "Bad username or password" errors, this means the MQTT broker requires authentication.
-- Update the credentials in `src/main.ts`
-- Or configure your MQTT broker to allow anonymous connections
-
-### Connection Refused
-- Verify the MQTT broker is running
-- Check the host and port settings in `src/main.ts`
-- Ensure no firewall is blocking the connection
-
-### For Development with Anonymous Access
-To run Mosquitto with anonymous access, create this configuration file (`mosquitto.conf`):
-```
-listener 1883
-allow_anonymous true
+```bash
+docker compose logs -f
 ```
 
-Then run: `mosquitto -c mosquitto.conf`
+### docker-compose 服务说明
+
+| 服务 | 镜像 | 说明 |
+|------|------|------|
+| `opencode-mqtt` | 本地构建 | MQTT 代理服务 |
+| `opencode` | `ghcr.io/anomalyco/opencode:latest` | OpenCode AI Server |
+
+两个服务共享 `/opt/workspace` 卷作为工作目录。
+
+## SSE 事件处理
+
+服务通过 SSE 连接 OpenCode Server 的 `/event` 端点，监听以下事件：
+
+| 事件 | 说明 | 处理 |
+|------|------|------|
+| `message.part.delta` | AI 流式输出增量 | 累积 `delta` 到 `accumulatedText` |
+| `message.part.updated` | Part 更新 | 记录完整 part 文本 |
+| `message.updated` | 消息状态变更 | 标记会话为 processing |
+| `session.idle` | AI 处理完成 | 触发最终响应发送 |
+| `session.status` | 会话状态 | 日志记录 |
+| `session.error` | 会话错误 | 发送错误响应 |
+| `server.heartbeat` | 心跳 | 忽略 |
+
+事件数据嵌套在 `properties` 字段中：
+
+```json
+{
+  "type": "session.idle",
+  "properties": {
+    "sessionID": "ses_xxx"
+  }
+}
+```
+
+## 超时机制
+
+- **SSE 会话等待超时**：300 秒（5 分钟）
+- **HTTP 请求超时**：30 秒
+- 超时后通过 MQTT 发送 `kind: 'error'` 消息至 `reply_to` 主题
+
+## 前置要求
+
+- Node.js >= 20
+- MQTT Broker（如 EMQX、Mosquitto）
+- OpenCode Server（`opencode serve`）
