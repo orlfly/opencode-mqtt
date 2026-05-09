@@ -6,12 +6,9 @@ services:
     env_file:
       - ../.env
     environment:
-      - MQTT_HOST=${MQTT_HOST:-mqtt-broker}
-      - MQTT_PORT=${MQTT_PORT:-1883}
-      - OPENCODE_BASE_URL=${OPENCODE_BASE_URL:-http://opencode:4096}
-      - OPENCODE_WORKSPACE_DIR=${OPENCODE_WORKSPACE_DIR:-/opt/workspace}
+      - OPENCODE_BASE_URL=http://opencode:4096
     volumes:
-      - ../workspace:/opt/workspace
+      - ./workspace:/opt/workspace
     depends_on:
       opencode:
         condition: service_healthy
@@ -22,20 +19,19 @@ services:
     image: ghcr.io/anomalyco/opencode:latest
     container_name: opencode
     restart: unless-stopped
-    command: serve --hostname 0.0.0.0 --port 4096
+    command: serve --hostname 0.0.0.0 --port 4096 --log-level INFO --print-logs
     working_dir: /opt/workspace
-    environment:
-      - OPENCODE_SERVER_PASSWORD=${OPENCODE_SERVER_PASSWORD:-}
-      - OPENCODE_MODEL=${OPENCODE_MODEL:-}
+    env_file:
+      - ../.env
     volumes:
-      - ../workspace:/opt/workspace
-      - ../config:/home/opencode/.config/opencode
+      - ./workspace:/opt/workspace
+      - ./config:/root/.config/opencode
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:4096/global/health"]
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:4096/global/health"]
       interval: 10s
       timeout: 5s
       retries: 10
-      start_period: 15s
+      start_period: 30s
     networks:
       - opencode-net
 
