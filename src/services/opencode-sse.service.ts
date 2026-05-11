@@ -381,6 +381,7 @@ export class OpenCodeSSEService implements OnApplicationBootstrap, OnApplication
    * 获取最终响应
    */
   private async getFinalResponse(sessionID: string, pendingSession: PendingSession) {
+    this.logger.log(`[DIAG] getFinalResponse called for session=${sessionID}, replyToTopic=${pendingSession.replyToTopic}`);
     try {
       pendingSession.status = 'completed';
       
@@ -519,6 +520,7 @@ export class OpenCodeSSEService implements OnApplicationBootstrap, OnApplication
    * 发送MQTT响应
    */
   private sendMQTTResponse(pendingSession: PendingSession, response: any) {
+    this.logger.log(`[DIAG] sendMQTTResponse: session=${pendingSession.sessionID}, replyToTopic=${pendingSession.replyToTopic}`);
     this.sendMQTTMessage(pendingSession.replyToTopic, response, pendingSession.userProperties);
   }
 

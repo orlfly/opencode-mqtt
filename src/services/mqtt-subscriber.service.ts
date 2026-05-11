@@ -4,6 +4,8 @@ import { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { OpenCodeService } from './opencode.service';
 import { OpenCodeSSEService } from './opencode-sse.service';
+import { MqttMessage } from '../interfaces/mqtt-message.interface';
+import { getMimeType, tryDecodeBase64Text, isTextFile } from '../utils/file.util';
 
 @Injectable()
 export class MqttSubscriberService implements OnApplicationBootstrap, OnApplicationShutdown {
@@ -200,7 +202,7 @@ export class MqttSubscriberService implements OnApplicationBootstrap, OnApplicat
 
   // Handle private chat messages
   private async handlePrivateChat(payload: any, packet?: any) {
-    this.logger.log(`Received private chat message: ${JSON.stringify(payload)}`);
+    this.logger.log(`[DIAG] handlePrivateChat entered, payload=${JSON.stringify(payload)}`);
     
     // Parse userProperties from the MQTT packet to get reply_to topic
     let replyToTopic = null;
@@ -210,17 +212,40 @@ export class MqttSubscriberService implements OnApplicationBootstrap, OnApplicat
       userProperties = packet.properties.userProperties;
     }
     
-    // Extract message details
     let sender = payload.senderId || payload.sender || 'unknown';
     let recipient = payload.recipient || 'unknown';
-    let message = payload.text || payload.message || JSON.stringify(payload);
+    let message = '';
     let timestamp = payload.timestamp;
+    const messageType = payload.type || 'text';
 
-    if (typeof message === 'object') {
-      message = JSON.stringify(message);
+    if (messageType === 'file') {
+      const fileName = payload.fileName || 'unknown';
+      const fileType = payload.fileType || 'application/octet-stream';
+      const fileDescription = payload.text || '';
+      let fileContentInfo = '';
+
+      if (payload.fileData) {
+        const decodedText = tryDecodeBase64Text(payload.fileData);
+        if (decodedText && isTextFile(fileName)) {
+          const truncated = decodedText.length > 2000
+            ? decodedText.substring(0, 2000) + '\n... (truncated)'
+            : decodedText;
+          fileContentInfo = `\n\nFile content:\n\`\`\`\n${truncated}\n\`\`\``;
+        }
+      }
+
+      message = `[File shared: ${fileName} (Type: ${fileType})]` +
+        (fileDescription ? ` ${fileDescription}` : '') +
+        fileContentInfo;
+
+      this.logger.log(`Private file message from ${sender}: ${fileName} (${fileType})`);
+    } else {
+      message = payload.text || payload.message || JSON.stringify(payload);
+      if (typeof message === 'object') {
+        message = JSON.stringify(message);
+      }
+      this.logger.log(`Private message from ${sender} to ${recipient}: ${message.substring(0, 50)}${message.length > 50 ? '...' : ''}`);
     }
-
-    this.logger.log(`Private message from ${sender} to ${recipient}: ${message.substring(0, 50)}${message.length > 50 ? '...' : ''}`);
     
     if (!replyToTopic) {
       this.logger.warn('No reply_to topic found in message properties, cannot send response');
@@ -332,7 +357,7 @@ export class MqttSubscriberService implements OnApplicationBootstrap, OnApplicat
 
   private async handleGroupMessage(topic: string, payload: any, packet?: any) {
     const groupTopic = topic;
-    this.logger.log(`Received group message on ${groupTopic}: ${JSON.stringify(payload)}`);
+    this.logger.log(`[DIAG] handleGroupMessage entered, topic="${topic}", payload=${JSON.stringify(payload)}`);
 
     const mySenderId = this.configService.get('mqtt.clientId') || 'opencode-agent';
 
@@ -343,35 +368,67 @@ export class MqttSubscriberService implements OnApplicationBootstrap, OnApplicat
       return;
     }
 
-    // targetIds: when present and our clientId is not included, record context but skip reply
+    // targetIds: determine if we should reply or just record context
     let shouldReply = true;
     const targetIds = payload.targetIds;
-    if (targetIds && Array.isArray(targetIds) && targetIds.length > 0) {
-      if (!targetIds.some((id: string) => id.includes(mySenderId))) {
-        this.logger.log(`Group message targetIds not meant for this client, recording context without reply`);
-        shouldReply = false;
-      }
+    if (!targetIds || !Array.isArray(targetIds) || targetIds.length === 0) {
+      this.logger.log(`[DIAG] Broadcast group message (no targetIds), shouldReply=false`);
+      shouldReply = false;
+    } else if (!targetIds.some((id: string) => id.includes(mySenderId))) {
+      this.logger.log(`[DIAG] Group message targetIds not meant for this client (targetIds=${JSON.stringify(targetIds)}, mySenderId=${mySenderId}), shouldReply=false`);
+      shouldReply = false;
+    } else {
+      this.logger.log(`[DIAG] Group message targets this client, shouldReply=true`);
     }
 
-    // Determine reply target: use groupTopic so all members see the AI response
+    // Reply target (used only when shouldReply is true)
     let replyToTopic = groupTopic;
     let userProperties: any = {};
     if (packet && packet.properties && packet.properties.userProperties) {
       userProperties = packet.properties.userProperties;
     }
 
-    let message = payload.text || payload.message || JSON.stringify(payload);
-    if (typeof message === 'object') {
-      message = JSON.stringify(message);
+    let message = '';
+    const messageType = payload.type || 'text';
+
+    if (messageType === 'file') {
+      const fileName = payload.fileName || 'unknown';
+      const fileType = payload.fileType || 'application/octet-stream';
+      const fileDescription = payload.text || '';
+      let fileContentInfo = '';
+
+      if (payload.fileData) {
+        const decodedText = tryDecodeBase64Text(payload.fileData);
+        if (decodedText && isTextFile(fileName)) {
+          const truncated = decodedText.length > 2000
+            ? decodedText.substring(0, 2000) + '\n... (truncated)'
+            : decodedText;
+          fileContentInfo = `\n\nFile content:\n\`\`\`\n${truncated}\n\`\`\``;
+        }
+      }
+
+      message = `[File shared: ${fileName} (Type: ${fileType})]` +
+        (fileDescription ? ` ${fileDescription}` : '') +
+        fileContentInfo;
+
+      this.logger.log(`Group file message from ${sender} on ${groupTopic}: shouldReply=${shouldReply}, ${fileName} (${fileType})`);
+    } else {
+      message = payload.text || payload.message || JSON.stringify(payload);
+      if (typeof message === 'object') {
+        message = JSON.stringify(message);
+      }
+      this.logger.log(`Group message from ${sender} on ${groupTopic}: shouldReply=${shouldReply}, ${message.substring(0, 50)}${message.length > 50 ? '...' : ''}`);
     }
 
-    this.logger.log(`Group message from ${sender} on ${groupTopic}: ${message.substring(0, 50)}${message.length > 50 ? '...' : ''}`);
+    if (!shouldReply) {
+      this.logger.log(`[DIAG] shouldReply=false, skipping OpenCode entirely`);
+      return;
+    }
 
-    // Always send to OpenCode to update conversation context
     const sessionID = `ses_mqtt_grp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const messageID = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
-    this.logger.log(`Processing group message via OpenCode promptAsync. Session: ${sessionID}, MessageID: ${messageID}`);
+    this.logger.log(`[DIAG] Calling processMqttMessageWithSession, replyToTopic=${replyToTopic}`);
 
     const result = await this.opencodeService.processMqttMessageWithSession(
       groupTopic,
@@ -380,21 +437,20 @@ export class MqttSubscriberService implements OnApplicationBootstrap, OnApplicat
       messageID
     );
 
+    this.logger.log(`[DIAG] processMqttMessageWithSession result: success=${result.success}, sessionId=${result.sessionId}`);
+
     if (result.success) {
       const actualSessionID = result.sessionId;
 
-      if (shouldReply) {
-        await this.sseService.registerPendingSession(
-          actualSessionID,
-          messageID,
-          replyToTopic,
-          userProperties,
-          payload
-        );
-        this.logger.log(`Session ${actualSessionID} registered for SSE tracking. Group response will be sent to: ${replyToTopic}`);
-      } else {
-        this.logger.log(`Session ${actualSessionID} context-only, skipping reply`);
-      }
+      this.logger.log(`[DIAG] About to registerPendingSession for session ${actualSessionID}`);
+      await this.sseService.registerPendingSession(
+        actualSessionID,
+        messageID,
+        replyToTopic,
+        userProperties,
+        payload
+      );
+      this.logger.log(`Session ${actualSessionID} registered for SSE tracking. Group response will be sent to: ${replyToTopic}`);
     } else {
       this.logger.error(`Failed to send group message to OpenCode: ${result.error}`);
 
@@ -486,5 +542,46 @@ export class MqttSubscriberService implements OnApplicationBootstrap, OnApplicat
     } else {
       this.logger.warn(`Cannot publish to ${topic} - MQTT client not connected`);
     }
+  }
+
+  public publishFileMessage(
+    topic: string,
+    fileName: string,
+    fileType: string,
+    fileData: string,
+    targetIds?: string[],
+    text?: string,
+  ) {
+    const mqttMessage: MqttMessage = {
+      id: this.generateMessageId(),
+      senderId: this.configService.get('mqtt.clientId') || 'opencode-agent',
+      timestamp: Date.now(),
+      type: 'file',
+      fileName,
+      fileType,
+      fileData,
+      ...(text ? { text } : {}),
+      ...(targetIds ? { targetIds } : {}),
+    };
+
+    const payload = JSON.stringify(mqttMessage);
+    const userProperties = {
+      name: this.configService.get('mqtt.properties.userProperties.name') || 'opencode-agent',
+      description: this.configService.get('mqtt.properties.userProperties.description') || 'Advanced Developer',
+      emoji: this.configService.get('mqtt.properties.userProperties.emoji') || '🤖',
+    };
+
+    this.logger.log(`Publishing file message to ${topic}: ${fileName} (${fileType})`);
+
+    this.publishMessageWithOptions(topic, payload, {
+      qos: 1,
+      properties: {
+        userProperties,
+      },
+    });
+  }
+
+  private generateMessageId(): string {
+    return `mqtt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   }
 }
