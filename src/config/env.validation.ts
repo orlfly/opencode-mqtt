@@ -58,7 +58,19 @@ class EnvironmentVariables {
 
   @IsString()
   @IsOptional()
-  MQTT_PRIVATE_CHAT_TOPIC?: string = 'private/chat/+';
+  MQTT_PRIVATE_CHAT_TOPIC?: string;
+
+  @IsString()
+  @IsOptional()
+  MQTT_GROUP_INVITE_TOPIC?: string;
+
+  @IsString()
+  @IsOptional()
+  MQTT_GROUP_DISBAND_TOPIC?: string;
+
+  @IsString()
+  @IsOptional()
+  MQTT_GROUP_CHAT_TOPIC?: string;
 }
 
 export function validateEnvConfig(config: Record<string, unknown>) {

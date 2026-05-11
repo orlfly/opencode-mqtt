@@ -40,13 +40,20 @@ async function bootstrap() {
   console.log(`Client ID: ${mqttClientId}`);
   console.log(`Using MQTT v${mqttProtocolVersion} protocol`);
   console.log(`User properties: name="${mqttUserProperties.name}", description="${mqttUserProperties.description}", emoji="${mqttUserProperties.emoji}"`);
-  console.log(`Private chat topic: ${mqttPrivateChatTopic}`);
+  if (mqttPrivateChatTopic) {
+    console.log(`Private chat topic: ${mqttPrivateChatTopic} (group invite/dismiss also use this topic)`);
+  } else {
+    console.log('Private chat topic: not configured');
+  }
 
-  // The MqttSubscriberService handles MQTT connection and private topic subscription
-  // It will be initialized through Nest's dependency injection when the application starts
   const mqttSubscriberService = app.get(MqttSubscriberService);
-  
-  console.log(`MQTT Subscriber Service initialized. It will connect and subscribe to private chat topic: ${mqttPrivateChatTopic}`);
+
+  console.log('MQTT Subscriber Service initialized.');
+  if (mqttPrivateChatTopic) {
+    console.log(`  - Private chat: ${mqttPrivateChatTopic}`);
+  } else {
+    console.log('  - Private chat: not configured');
+  }
   if (mqttUsername) {
     console.log(`Authenticated as: ${mqttUsername}`);
   } else {

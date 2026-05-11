@@ -4,7 +4,6 @@ import { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { OpenCodeService } from './opencode.service';
 import { OpenCodeSSEService } from './opencode-sse.service';
-import { MqttMessage } from '../interfaces/mqtt-message.interface';
 
 @Injectable()
 export class MqttSubscriberService implements OnApplicationBootstrap, OnApplicationShutdown {
@@ -90,43 +89,61 @@ export class MqttSubscriberService implements OnApplicationBootstrap, OnApplicat
   }
 
   private subscribeToTopics() {
-    // Get private chat topic from config
-    const privateChatTopic = this.configService.get('mqtt.privateChatTopic') || 'private/chat/+';
-    
-    // Subscribe only to the private chat topic after connection is established
-    this.mqttClient.subscribe(privateChatTopic, (err) => {
-      if (err) {
-        this.logger.error(`Failed to subscribe to ${privateChatTopic}: ${err.message}`);
-      } else {
-        this.logger.log(`Successfully subscribed to private chat topic: ${privateChatTopic}`);
-      }
-    });
+    const privateChatTopic = this.configService.get('mqtt.privateChatTopic');
+
+    if (privateChatTopic) {
+      this.mqttClient.subscribe(privateChatTopic, (err) => {
+        if (err) {
+          this.logger.error(`Failed to subscribe to private chat topic ${privateChatTopic}: ${err.message}`);
+        } else {
+          this.logger.log(`Successfully subscribed to private chat topic: ${privateChatTopic}`);
+        }
+      });
+    } else {
+      this.logger.warn('No private chat topic configured, skipping private chat subscription');
+    }
 
     // Set up message handlers
     this.setupMessageHandlers();
   }
 
   private setupMessageHandlers() {
-    // Remove existing message listener to prevent duplicates on reconnection
     this.mqttClient.removeAllListeners('message');
-    
+
+    const privateChatTopicPattern = this.configService.get('mqtt.privateChatTopic');
+
     this.mqttClient.on('message', (topic, message, packet) => {
       try {
         const payload = JSON.parse(message.toString());
-        
-        // Only handle private chat messages as per requirement
-        const privateChatTopicPattern = this.configService.get('mqtt.privateChatTopic') || 'private/chat/+';
-        
-        // Check if topic matches the configured private chat topic pattern
-        // Support both exact match and wildcard patterns
-        if (this.isTopicMatch(topic, privateChatTopicPattern)) {
+
+        // 1. Private chat topic messages (including control messages for group management)
+        if (privateChatTopicPattern && this.isTopicMatch(topic, privateChatTopicPattern)) {
+          const kind = payload.kind;
+
+          if (kind === 'invite') {
+            this.handleGroupInvite(payload, packet).catch(error => {
+              this.logger.error(`Error handling group invite: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            });
+            return;
+          }
+
+          if (kind === 'dismissed') {
+            this.handleGroupDismiss(payload, packet).catch(error => {
+              this.logger.error(`Error handling group dismiss: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            });
+            return;
+          }
+
           this.handlePrivateChat(payload, packet).catch(error => {
-            const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-            this.logger.error(`Error handling private chat message: ${errorMessage}`);
+            this.logger.error(`Error handling private chat message: ${error instanceof Error ? error.message : 'Unknown error'}`);
           });
-        } else {
-          this.logger.warn(`Received message on unhandled topic: ${topic}`);
+          return;
         }
+
+        // 2. Everything else is a group message
+        this.handleGroupMessage(topic, payload, packet).catch(error => {
+          this.logger.error(`Error handling group message: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        });
       } catch (error) {
         this.logger.error(`Error processing message on topic ${topic}: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }
@@ -219,7 +236,7 @@ export class MqttSubscriberService implements OnApplicationBootstrap, OnApplicat
 
     // Send the message to OpenCode using promptAsync
     const result = await this.opencodeService.processMqttMessageWithSession(
-      this.configService.get('mqtt.privateChatTopic') || 'private/chat/+',
+      this.configService.get('mqtt.privateChatTopic'),
       payload,
       sessionID,
       messageID
@@ -262,6 +279,145 @@ export class MqttSubscriberService implements OnApplicationBootstrap, OnApplicat
             emoji: this.configService.get('mqtt.properties.userProperties.emoji') || '🤖',
           }
         }
+      });
+    }
+  }
+
+  private async handleGroupInvite(payload: any, packet?: any) {
+    this.logger.log(`Received group invite: ${JSON.stringify(payload)}`);
+
+    const groupTopic = payload.topic;
+    if (!groupTopic) {
+      this.logger.warn('Group invite message missing "topic" field');
+      return;
+    }
+
+    this.mqttClient.subscribe(groupTopic, (err) => {
+      if (err) {
+        this.logger.error(`Failed to subscribe to group topic ${groupTopic}: ${err.message}`);
+        return;
+      }
+      this.logger.log(`Subscribed to group topic: ${groupTopic}`);
+
+      const acceptMsg = {
+        id: `mqtt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        text: 'invite accepted',
+        senderId: this.configService.get('mqtt.clientId') || 'opencode-agent',
+        kind: 'accept',
+        ts: Date.now(),
+        topic: groupTopic,
+      };
+      this.mqttClient.publish(groupTopic, JSON.stringify(acceptMsg), { qos: 1 });
+      this.logger.log(`Sent invite accept to group topic: ${groupTopic}`);
+    });
+  }
+
+  private async handleGroupDismiss(payload: any, packet?: any) {
+    this.logger.log(`Received group dismiss: ${JSON.stringify(payload)}`);
+
+    const groupTopic = payload.topic;
+    if (!groupTopic) {
+      this.logger.warn('Group dismiss message missing "topic" field');
+      return;
+    }
+
+    this.mqttClient.unsubscribe(groupTopic, (err) => {
+      if (err) {
+        this.logger.error(`Failed to unsubscribe from group topic ${groupTopic}: ${err.message}`);
+        return;
+      }
+      this.logger.log(`Unsubscribed from group topic: ${groupTopic}`);
+    });
+  }
+
+  private async handleGroupMessage(topic: string, payload: any, packet?: any) {
+    const groupTopic = topic;
+    this.logger.log(`Received group message on ${groupTopic}: ${JSON.stringify(payload)}`);
+
+    const mySenderId = this.configService.get('mqtt.clientId') || 'opencode-agent';
+
+    // Skip self-sent messages
+    const sender = payload.senderId || payload.sender || 'unknown';
+    if (sender === mySenderId) {
+      this.logger.debug(`Ignoring self-sent group message from ${sender}`);
+      return;
+    }
+
+    // targetIds: when present and our clientId is not included, record context but skip reply
+    let shouldReply = true;
+    const targetIds = payload.targetIds;
+    if (targetIds && Array.isArray(targetIds) && targetIds.length > 0) {
+      if (!targetIds.some((id: string) => id.includes(mySenderId))) {
+        this.logger.log(`Group message targetIds not meant for this client, recording context without reply`);
+        shouldReply = false;
+      }
+    }
+
+    // Determine reply target: use groupTopic so all members see the AI response
+    let replyToTopic = groupTopic;
+    let userProperties: any = {};
+    if (packet && packet.properties && packet.properties.userProperties) {
+      userProperties = packet.properties.userProperties;
+    }
+
+    let message = payload.text || payload.message || JSON.stringify(payload);
+    if (typeof message === 'object') {
+      message = JSON.stringify(message);
+    }
+
+    this.logger.log(`Group message from ${sender} on ${groupTopic}: ${message.substring(0, 50)}${message.length > 50 ? '...' : ''}`);
+
+    // Always send to OpenCode to update conversation context
+    const sessionID = `ses_mqtt_grp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const messageID = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+    this.logger.log(`Processing group message via OpenCode promptAsync. Session: ${sessionID}, MessageID: ${messageID}`);
+
+    const result = await this.opencodeService.processMqttMessageWithSession(
+      groupTopic,
+      payload,
+      sessionID,
+      messageID
+    );
+
+    if (result.success) {
+      const actualSessionID = result.sessionId;
+
+      if (shouldReply) {
+        await this.sseService.registerPendingSession(
+          actualSessionID,
+          messageID,
+          replyToTopic,
+          userProperties,
+          payload
+        );
+        this.logger.log(`Session ${actualSessionID} registered for SSE tracking. Group response will be sent to: ${replyToTopic}`);
+      } else {
+        this.logger.log(`Session ${actualSessionID} context-only, skipping reply`);
+      }
+    } else {
+      this.logger.error(`Failed to send group message to OpenCode: ${result.error}`);
+
+      const errorMessage = {
+        id: payload.id,
+        text: `Error: Failed to process group message - ${result.error}`,
+        senderId: mySenderId,
+        kind: 'error',
+        ts: Date.now(),
+        originalMessageId: payload.id,
+        processedAt: new Date().toISOString(),
+        status: 'error',
+      };
+
+      this.mqttClient.publish(replyToTopic, JSON.stringify(errorMessage), {
+        qos: 1,
+        properties: {
+          userProperties: {
+            name: this.configService.get('mqtt.properties.userProperties.name') || 'opencode-agent',
+            description: this.configService.get('mqtt.properties.userProperties.description') || 'Advanced Developer',
+            emoji: this.configService.get('mqtt.properties.userProperties.emoji') || '🤖',
+          },
+        },
       });
     }
   }

@@ -19,7 +19,7 @@ export default registerAs('mqtt', () => ({
     }
   },
   // Private chat topic
-  privateChatTopic: process.env.MQTT_PRIVATE_CHAT_TOPIC || 'private/chat/+',
+  privateChatTopic: process.env.MQTT_PRIVATE_CHAT_TOPIC,
   // Group chat topics
   groupInviteTopic: process.env.MQTT_GROUP_INVITE_TOPIC || 'group/invite/+',
   groupDisbandTopic: process.env.MQTT_GROUP_DISBAND_TOPIC || 'group/disband/+',
