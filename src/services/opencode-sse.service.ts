@@ -475,7 +475,7 @@ export class OpenCodeSSEService implements OnApplicationBootstrap, OnApplication
       }
 
       // 构建响应消息
-      const responseMessage = {
+      const responseMessage: any = {
         id: pendingSession.messageID,
         text: responseText,
         senderId: this.configService.get('mqtt.clientId') || 'opencode-agent',
@@ -487,6 +487,11 @@ export class OpenCodeSSEService implements OnApplicationBootstrap, OnApplication
         tokens,
         cost
       };
+
+      // 如果原始消息使用了 targetIds 指定接收者，回复时将原发送者作为 targetIds
+      if (pendingSession.originalPayload.senderId) {
+        responseMessage.targetIds = [pendingSession.originalPayload.senderId];
+      }
 
       // 通过MQTT发送响应
       this.sendMQTTResponse(pendingSession, responseMessage);
@@ -503,7 +508,7 @@ export class OpenCodeSSEService implements OnApplicationBootstrap, OnApplication
    * 发送中间结果
    */
   private sendIntermediateResult(pendingSession: PendingSession, result: any) {
-    const intermediateMessage = {
+    const intermediateMessage: any = {
       id: pendingSession.messageID,
       text: result.content,
       senderId: this.configService.get('mqtt.clientId') || 'opencode-agent',
@@ -512,6 +517,10 @@ export class OpenCodeSSEService implements OnApplicationBootstrap, OnApplication
       originalMessageId: pendingSession.originalPayload.id,
       type: result.type
     };
+
+    if (pendingSession.originalPayload.senderId) {
+      intermediateMessage.targetIds = [pendingSession.originalPayload.senderId];
+    }
 
     this.sendMQTTMessage(pendingSession.replyToTopic, intermediateMessage, pendingSession.userProperties);
   }
@@ -551,7 +560,7 @@ export class OpenCodeSSEService implements OnApplicationBootstrap, OnApplication
    * 发送错误响应
    */
   private sendErrorResponse(pendingSession: PendingSession, error: any) {
-    const errorMessage = {
+    const errorMessage: any = {
       id: pendingSession.messageID,
       text: `Error: ${typeof error === 'string' ? error : JSON.stringify(error)}`,
       senderId: this.configService.get('mqtt.clientId') || 'opencode-agent',
@@ -561,6 +570,10 @@ export class OpenCodeSSEService implements OnApplicationBootstrap, OnApplication
       processedAt: new Date().toISOString(),
       status: 'error'
     };
+
+    if (pendingSession.originalPayload.senderId) {
+      errorMessage.targetIds = [pendingSession.originalPayload.senderId];
+    }
 
     this.sendMQTTResponse(pendingSession, errorMessage);
     this.pendingSessions.delete(pendingSession.sessionID);

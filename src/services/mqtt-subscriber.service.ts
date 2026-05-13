@@ -284,7 +284,7 @@ export class MqttSubscriberService implements OnApplicationBootstrap, OnApplicat
       this.logger.error(`Failed to send message to OpenCode: ${result.error}`);
       
       // Send error response directly
-      const errorMessage = {
+      const errorMessage: any = {
         id: payload.id,
         text: `Error: Failed to process message - ${result.error}`,
         senderId: this.configService.get('mqtt.clientId') || 'opencode-agent',
@@ -294,6 +294,10 @@ export class MqttSubscriberService implements OnApplicationBootstrap, OnApplicat
         processedAt: new Date().toISOString(),
         status: 'error'
       };
+
+      if (payload.senderId) {
+        errorMessage.targetIds = [payload.senderId];
+      }
 
       this.mqttClient.publish(replyToTopic, JSON.stringify(errorMessage), {
         qos: 1,
