@@ -2,10 +2,11 @@ import { Injectable, Logger, OnApplicationBootstrap, OnApplicationShutdown } fro
 import { MqttClient, connect } from 'mqtt';
 import { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { OpenCodeService } from './opencode.service';
-import { OpenCodeSSEService } from './opencode-sse.service';
-import { MqttMessage } from '../interfaces/mqtt-message.interface';
-import { getMimeType, tryDecodeBase64Text, isTextFile } from '../utils/file.util';
+import { OpenCodeService } from './opencode.service.js';
+import { OpenCodeSSEService } from './opencode-sse.service.js';
+import { SessionManagerService } from './session-manager.service.js';
+import { MqttMessage } from '../interfaces/mqtt-message.interface.js';
+import { getMimeType, tryDecodeBase64Text, isTextFile } from '../utils/file.util.js';
 
 @Injectable()
 export class MqttSubscriberService implements OnApplicationBootstrap, OnApplicationShutdown {
@@ -13,15 +14,13 @@ export class MqttSubscriberService implements OnApplicationBootstrap, OnApplicat
   private mqttClient: MqttClient;
   private connected = false;
 
-
-
   constructor(
     private configService: ConfigService,
     private opencodeService: OpenCodeService,
     private sseService: OpenCodeSSEService,
+    private sessionManager: SessionManagerService,
     private eventEmitter: EventEmitter2,
   ) {
-    // Listen for MQTT publish requests from SSE service
     this.eventEmitter.on('mqtt.publish', (data: any) => {
       this.publishMessageWithOptions(data.topic, data.message, data.options);
     });
@@ -29,8 +28,7 @@ export class MqttSubscriberService implements OnApplicationBootstrap, OnApplicat
 
   async onApplicationBootstrap() {
     this.logger.log('Setting up MQTT subscriber service...');
-    
-    // Get MQTT configuration
+
     const mqttHost = this.configService.get('mqtt.host');
     const mqttPort = this.configService.get('mqtt.port');
     const mqttUsername = this.configService.get('mqtt.username');
@@ -42,10 +40,9 @@ export class MqttSubscriberService implements OnApplicationBootstrap, OnApplicat
     const mqttProtocolVersion = this.configService.get('mqtt.protocolVersion');
 
     const brokerUrl = `mqtt://${mqttHost}:${mqttPort}`;
-    
+
     this.logger.log(`Connecting to MQTT broker at ${brokerUrl}...`);
-    
-    // Create MQTT client
+
     this.mqttClient = connect(brokerUrl, {
       clientId: mqttClientId,
       clean: mqttClean,
@@ -63,15 +60,11 @@ export class MqttSubscriberService implements OnApplicationBootstrap, OnApplicat
       }
     });
 
-    // Set max listeners to prevent memory leaks
     this.mqttClient.setMaxListeners(10);
 
-    // Handle connection events
     this.mqttClient.on('connect', () => {
       this.connected = true;
       this.logger.log('Connected to MQTT broker');
-      
-      // Subscribe to all required topics after successful connection
       this.subscribeToTopics();
     });
 
@@ -105,7 +98,6 @@ export class MqttSubscriberService implements OnApplicationBootstrap, OnApplicat
       this.logger.warn('No private chat topic configured, skipping private chat subscription');
     }
 
-    // Set up message handlers
     this.setupMessageHandlers();
   }
 
@@ -118,7 +110,6 @@ export class MqttSubscriberService implements OnApplicationBootstrap, OnApplicat
       try {
         const payload = JSON.parse(message.toString());
 
-        // 1. Private chat topic messages (including control messages for group management)
         if (privateChatTopicPattern && this.isTopicMatch(topic, privateChatTopicPattern)) {
           const kind = payload.kind;
 
@@ -142,7 +133,6 @@ export class MqttSubscriberService implements OnApplicationBootstrap, OnApplicat
           return;
         }
 
-        // 2. Everything else is a group message
         this.handleGroupMessage(topic, payload, packet).catch(error => {
           this.logger.error(`Error handling group message: ${error instanceof Error ? error.message : 'Unknown error'}`);
         });
@@ -152,66 +142,57 @@ export class MqttSubscriberService implements OnApplicationBootstrap, OnApplicat
     });
   }
 
-  // Helper method to check if a topic matches a pattern (supporting wildcards)
   private isTopicMatch(topic: string, pattern: string): boolean {
-    // Simple placeholder - check if topic exactly matches the pattern
-    // In a more sophisticated implementation, we would handle MQTT wildcards (+ and #)
     if (pattern === topic) {
       return true;
     }
-    
-    // Also handle wildcard patterns like 'private/chat/+' which would match 'private/chat/user123'
+
     if (pattern.includes('+')) {
       const patternParts = pattern.split('/');
       const topicParts = topic.split('/');
-      
+
       if (patternParts.length !== topicParts.length) {
         return false;
       }
-      
+
       for (let i = 0; i < patternParts.length; i++) {
         if (patternParts[i] !== '+' && patternParts[i] !== topicParts[i]) {
           return false;
         }
       }
-      
+
       return true;
     }
-    
-    // For '#' wildcard, handle differently
+
     if (pattern.includes('#')) {
       const patternParts = pattern.split('/');
       const topicParts = topic.split('/');
-      
-      // Find position of '#' wildcard
+
       const hashIndex = patternParts.indexOf('#');
       if (hashIndex === -1) return false;
-      
-      // Check parts before '#' match
+
       for (let i = 0; i < hashIndex; i++) {
         if (patternParts[i] !== topicParts[i]) {
           return false;
         }
       }
-      
-      return true; // Everything after '#' matches
+
+      return true;
     }
-    
+
     return false;
   }
 
-  // Handle private chat messages
   private async handlePrivateChat(payload: any, packet?: any) {
     this.logger.log(`[DIAG] handlePrivateChat entered, payload=${JSON.stringify(payload)}`);
-    
-    // Parse userProperties from the MQTT packet to get reply_to topic
-    let replyToTopic = null;
+
+    let replyToTopic: string = '';
     let userProperties: any = {};
     if (packet && packet.properties && packet.properties.userProperties) {
-      replyToTopic = packet.properties.userProperties.reply_to || packet.properties.userProperties['reply-to'];
+      replyToTopic = packet.properties.userProperties.reply_to || packet.properties.userProperties['reply-to'] || '';
       userProperties = packet.properties.userProperties;
     }
-    
+
     let sender = payload.senderId || payload.sender || 'unknown';
     let recipient = payload.recipient || 'unknown';
     let message = '';
@@ -246,44 +227,41 @@ export class MqttSubscriberService implements OnApplicationBootstrap, OnApplicat
       }
       this.logger.log(`Private message from ${sender} to ${recipient}: ${message.substring(0, 50)}${message.length > 50 ? '...' : ''}`);
     }
-    
+
     if (!replyToTopic) {
       this.logger.warn('No reply_to topic found in message properties, cannot send response');
       return;
     }
 
-    // Generate session ID and message ID
-    // OpenCode requires session ID format: ses_xxxxxx (with underscore, not dash)
-    const sessionID = `ses_mqtt_${Date.now()}`;
-    const messageID = `msg_${Date.now()}`;
+    const senderName = userProperties['name'] || sender;
 
-    this.logger.log(`Processing message via OpenCode promptAsync. Session: ${sessionID}, MessageID: ${messageID}`);
+    const { sessionID, messageID } = this.sessionManager.getOrCreatePrivateSession(
+      sender,
+      senderName,
+      replyToTopic,
+    );
 
-    // Send the message to OpenCode using promptAsync
     const result = await this.opencodeService.processMqttMessageWithSession(
       this.configService.get('mqtt.privateChatTopic'),
       payload,
       sessionID,
-      messageID
+      messageID,
     );
 
     if (result.success) {
-      // Register the session with SSE service for result tracking
-      // Use the actual session ID returned by OpenCode (may differ from requested ID)
       const actualSessionID = result.sessionId;
       await this.sseService.registerPendingSession(
         actualSessionID,
         messageID,
         replyToTopic,
         userProperties,
-        payload
+        payload,
       );
 
       this.logger.log(`Session ${actualSessionID} registered for SSE tracking. Response will be sent to: ${replyToTopic}`);
     } else {
       this.logger.error(`Failed to send message to OpenCode: ${result.error}`);
-      
-      // Send error response directly
+
       const errorMessage: any = {
         id: payload.id,
         text: `Error: Failed to process message - ${result.error}`,
@@ -292,7 +270,7 @@ export class MqttSubscriberService implements OnApplicationBootstrap, OnApplicat
         ts: Date.now(),
         originalMessageId: payload.id,
         processedAt: new Date().toISOString(),
-        status: 'error'
+        status: 'error',
       };
 
       if (payload.senderId) {
@@ -306,8 +284,8 @@ export class MqttSubscriberService implements OnApplicationBootstrap, OnApplicat
             name: this.configService.get('mqtt.properties.userProperties.name') || 'opencode-agent',
             description: this.configService.get('mqtt.properties.userProperties.description') || 'Advanced Developer',
             emoji: this.configService.get('mqtt.properties.userProperties.emoji') || '🤖',
-          }
-        }
+          },
+        },
       });
     }
   }
@@ -320,6 +298,9 @@ export class MqttSubscriberService implements OnApplicationBootstrap, OnApplicat
       this.logger.warn('Group invite message missing "topic" field');
       return;
     }
+
+    const sender = payload.senderId || payload.sender || 'unknown';
+    this.sessionManager.addGroupMember(groupTopic, sender);
 
     this.mqttClient.subscribe(groupTopic, (err) => {
       if (err) {
@@ -350,6 +331,11 @@ export class MqttSubscriberService implements OnApplicationBootstrap, OnApplicat
       return;
     }
 
+    const sessionID = this.sessionManager.dismissGroup(groupTopic);
+    if (sessionID) {
+      this.sseService.cleanupSession(sessionID);
+    }
+
     this.mqttClient.unsubscribe(groupTopic, (err) => {
       if (err) {
         this.logger.error(`Failed to unsubscribe from group topic ${groupTopic}: ${err.message}`);
@@ -365,14 +351,12 @@ export class MqttSubscriberService implements OnApplicationBootstrap, OnApplicat
 
     const mySenderId = this.configService.get('mqtt.clientId') || 'opencode-agent';
 
-    // Skip self-sent messages
     const sender = payload.senderId || payload.sender || 'unknown';
     if (sender === mySenderId) {
       this.logger.debug(`Ignoring self-sent group message from ${sender}`);
       return;
     }
 
-    // targetIds: determine if we should reply or just record context
     let shouldReply = true;
     const targetIds = payload.targetIds;
     if (!targetIds || !Array.isArray(targetIds) || targetIds.length === 0) {
@@ -385,7 +369,6 @@ export class MqttSubscriberService implements OnApplicationBootstrap, OnApplicat
       this.logger.log(`[DIAG] Group message targets this client, shouldReply=true`);
     }
 
-    // Reply target (used only when shouldReply is true)
     let replyToTopic = groupTopic;
     let userProperties: any = {};
     if (packet && packet.properties && packet.properties.userProperties) {
@@ -429,16 +412,20 @@ export class MqttSubscriberService implements OnApplicationBootstrap, OnApplicat
       return;
     }
 
-    const sessionID = `ses_mqtt_grp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const messageID = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const senderName = userProperties['name'] || sender;
 
-    this.logger.log(`[DIAG] Calling processMqttMessageWithSession, replyToTopic=${replyToTopic}`);
+    const { sessionID, messageID } = this.sessionManager.getOrCreateGroupSession(
+      groupTopic,
+      sender,
+      senderName,
+      replyToTopic,
+    );
 
     const result = await this.opencodeService.processMqttMessageWithSession(
       groupTopic,
       payload,
       sessionID,
-      messageID
+      messageID,
     );
 
     this.logger.log(`[DIAG] processMqttMessageWithSession result: success=${result.success}, sessionId=${result.sessionId}`);
@@ -452,7 +439,7 @@ export class MqttSubscriberService implements OnApplicationBootstrap, OnApplicat
         messageID,
         replyToTopic,
         userProperties,
-        payload
+        payload,
       );
       this.logger.log(`Session ${actualSessionID} registered for SSE tracking. Group response will be sent to: ${replyToTopic}`);
     } else {
@@ -484,12 +471,11 @@ export class MqttSubscriberService implements OnApplicationBootstrap, OnApplicat
 
   async onApplicationShutdown() {
     if (this.mqttClient && this.connected) {
-      this.mqttClient.end(true); // Force close
+      this.mqttClient.end(true);
       this.logger.log('MQTT client disconnected');
     }
   }
 
-  // Method to dynamically subscribe to additional topics at runtime
   public subscribeToTopic(topic: string) {
     if (this.mqttClient && this.connected) {
       this.mqttClient.subscribe(topic, (err) => {
@@ -504,7 +490,6 @@ export class MqttSubscriberService implements OnApplicationBootstrap, OnApplicat
     }
   }
 
-  // Method to dynamically unsubscribe from topics at runtime
   public unsubscribeFromTopic(topic: string) {
     if (this.mqttClient && this.connected) {
       this.mqttClient.unsubscribe(topic, (err) => {
@@ -517,7 +502,6 @@ export class MqttSubscriberService implements OnApplicationBootstrap, OnApplicat
     }
   }
 
-  // Method to publish messages
   public publishMessage(topic: string, message: any) {
     if (this.mqttClient && this.connected) {
       const payload = typeof message === 'object' ? JSON.stringify(message) : message;
@@ -533,7 +517,6 @@ export class MqttSubscriberService implements OnApplicationBootstrap, OnApplicat
     }
   }
 
-  // Method to publish messages with full options (used by SSE service)
   private publishMessageWithOptions(topic: string, message: string, options: any) {
     if (this.mqttClient && this.connected) {
       this.mqttClient.publish(topic, message, options, (err) => {

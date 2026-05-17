@@ -1,12 +1,14 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { EventEmitterModule } from '@nestjs/event-emitter';
-import mqttConfig from './config/mqtt.config';
-import { validateEnvConfig } from './config/env.validation';
-import { AppService } from './app.service';
-import { OpenCodeService } from './services/opencode.service';
-import { MqttSubscriberService } from './services/mqtt-subscriber.service';
-import { OpenCodeSSEService } from './services/opencode-sse.service';
+import mqttConfig from './config/mqtt.config.js';
+import { validateEnvConfig } from './config/env.validation.js';
+import { AppService } from './app.service.js';
+import { OpenCodeService } from './services/opencode.service.js';
+import { OpencodeClientService } from './services/opencode-client.service.js';
+import { MqttSubscriberService } from './services/mqtt-subscriber.service.js';
+import { OpenCodeSSEService } from './services/opencode-sse.service.js';
+import { SessionManagerService } from './services/session-manager.service.js';
 
 @Module({
   imports: [
@@ -18,6 +20,6 @@ import { OpenCodeSSEService } from './services/opencode-sse.service';
     }),
     EventEmitterModule.forRoot(),
   ],
-  providers: [AppService, OpenCodeService, MqttSubscriberService, OpenCodeSSEService],
+  providers: [AppService, OpencodeClientService, OpenCodeService, SessionManagerService, MqttSubscriberService, OpenCodeSSEService],
 })
 export class AppModule {}

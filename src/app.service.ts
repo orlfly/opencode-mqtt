@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { OpenCodeService } from './services/opencode.service';
+import { OpenCodeService } from './services/opencode.service.js';
 
 @Injectable()
 export class AppService {

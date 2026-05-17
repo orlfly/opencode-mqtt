@@ -1,9 +1,9 @@
 import { NestFactory } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
-import { AppModule } from './app.module';
-import { validateHost, validatePort, validateClientId } from './utils/validation.util';
-import { validateEnvConfig } from './config/env.validation';
-import { MqttSubscriberService } from './services/mqtt-subscriber.service';
+import { AppModule } from './app.module.js';
+import { validateHost, validatePort, validateClientId } from './utils/validation.util.js';
+import { validateEnvConfig } from './config/env.validation.js';
+import { MqttSubscriberService } from './services/mqtt-subscriber.service.js';
 
 async function bootstrap() {
   const app = await NestFactory.createApplicationContext(AppModule);

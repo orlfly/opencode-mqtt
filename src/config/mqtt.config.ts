@@ -29,4 +29,6 @@ export default registerAs('mqtt', () => ({
   opencodeApiKey: process.env.OPENCODE_API_KEY || '',
   opencodeWorkspaceDir: process.env.OPENCODE_WORKSPACE_DIR || process.cwd(),
   opencodeModel: process.env.OPENCODE_MODEL || undefined,  // Format: provider_id/model_id (e.g., anthropic/claude-sonnet-4-5)
+  // MQTT session timeout: reuse sessions per sender/group, close after inactivity
+  sessionTimeout: parseInt(process.env.MQTT_SESSION_TIMEOUT, 10) || 300000,
 }));
