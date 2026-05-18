@@ -431,9 +431,14 @@ export class OpenCodeSSEService implements OnApplicationBootstrap, OnApplication
         }
       }
 
-      const senderName = pendingSession.originalPayload.senderId || pendingSession.originalPayload.sender || 'unknown';
-      if (responseText && responseText.length > 0) {
-        responseText = `@${senderName}\n${responseText}`;
+      // 群聊场景：在回复文本前加 @发送者 前缀
+      if (pendingSession.originalPayload.senderId &&
+          pendingSession.originalPayload.targetIds &&
+          pendingSession.originalPayload.targetIds.length > 0) {
+        const senderName = pendingSession.originalPayload.senderId;
+        if (responseText && responseText.length > 0) {
+          responseText = `@${senderName}\n${responseText}`;
+        }
       }
 
       const responseMessage: any = {
@@ -449,7 +454,7 @@ export class OpenCodeSSEService implements OnApplicationBootstrap, OnApplication
         cost,
       };
 
-      // 仅当原始消息使用 targetIds 指定接收者（群聊场景）时，回复才携带 targetIds
+      // 群聊场景：回复携带 targetIds，仅发给发起者
       if (pendingSession.originalPayload.senderId &&
           pendingSession.originalPayload.targetIds &&
           pendingSession.originalPayload.targetIds.length > 0) {
