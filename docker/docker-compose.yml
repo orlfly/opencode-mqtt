@@ -7,8 +7,11 @@ services:
       - ../.env
     environment:
       - OPENCODE_BASE_URL=http://opencode:4096
+      - MQTT_HOST=host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
-      - ./workspace:/opt/workspace
+      - ../workspace:/opt/workspace
     depends_on:
       opencode:
         condition: service_healthy

@@ -6,8 +6,8 @@
 
 ```
 MQTT Client ──publish──▶ MQTT Broker ──subscribe──▶ opencode-mqtt ──promptAsync──▶ OpenCode Server
-                                                                          │
-                          MQTT Broker ◀──publish─── opencode-mqtt ◀──SSE event──┘
+                                                                            │
+                           MQTT Broker ◀──publish─── opencode-mqtt ◀──SSE event──┘
 ```
 
 ### 核心流程
@@ -35,35 +35,28 @@ interface MqttMessage {
 }
 ```
 
+支持 `text` 和 `file` 两种消息类型。文件消息的 `fileData` 为 Base64 编码，可自动解码文本文件内容并传给 AI 分析。
+
 ### 回复消息
 
 ```typescript
 {
-  id: string;            // 消息ID
-  text: string;          // AI 响应文本
-  senderId: string;      // MQTT 客户端ID
+  id: string;              // 消息ID
+  text: string;            // AI 响应文本
+  senderId: string;        // MQTT 客户端ID
+  targetIds?: string[];    // 原始发送者ID，用于群消息场景
   kind: 'final' | 'intermediate' | 'error';
-  ts: number;            // 时间戳
+  ts: number;              // 时间戳
   originalMessageId: string;
   status: 'success' | 'error';
 }
 ```
 
+回复消息自动携带 `targetIds: [原消息的 senderId]`，确保群聊场景下回应正确路由到发送者。
+
 ### MQTT v5.0 User Properties
 
 发送方在消息中需携带 `reply_to` 属性，服务据此回复：
-
-```typescript
-{
-  userProperties: {
-    reply_to: 'web-viewer/inbound',  // 回复主题
-    name: 'web-viewer',
-    // ...
-  }
-}
-```
-
-回复消息携带以下 User Properties：
 
 | 属性 | 来源 | 说明 |
 |------|------|------|
@@ -81,6 +74,8 @@ src/
 │   └── mqtt.config.ts                   # MQTT 及 OpenCode 配置
 ├── interfaces/
 │   └── mqtt-message.interface.ts        # 消息格式定义
+├── utils/
+│   └── file.util.ts                     # 文件处理工具
 └── services/
     ├── mqtt-subscriber.service.ts       # MQTT 订阅、消息接收与路由
     ├── opencode.service.ts              # OpenCode API 调用（创建会话、promptAsync）
@@ -104,7 +99,7 @@ cp .env.example .env
 | `MQTT_PORT` | `1883` | MQTT Broker 端口 |
 | `MQTT_USERNAME` | - | MQTT 认证用户名 |
 | `MQTT_PASSWORD` | - | MQTT 认证密码 |
-| `MQTT_CLIENT_ID` | 随机生成 | MQTT 客户端ID，同时作为回复消息的 `senderId` |
+| `MQTT_CLIENT_ID` | 随机生成 | 同时作为回复消息的 `senderId` |
 | `MQTT_PRIVATE_CHAT_TOPIC` | `private/chat/+` | 订阅的私聊主题 |
 | `MQTT_USER_PROPERTIES_NAME` | `nestjs-mqtt-service` | 回复消息 User Properties 的 name |
 | `MQTT_USER_PROPERTIES_DESCRIPTION` | `NestJS MQTT Microservice Client` | 回复消息 User Properties 的 description |
@@ -125,23 +120,39 @@ npm run start:dev
 
 ### Docker 部署
 
+**前置准备**：确保宿主机上有 MQTT Broker（如 EMQX）在 1883 端口运行。
+
 **1. 构建镜像**
 
 ```bash
 docker build -f docker/Dockerfile -t opencode-mqtt:latest .
 ```
 
-**2. 启动服务**
+**2. 准备目录**
+
+```bash
+mkdir -p workspace config
+```
+
+**3. 启动服务**
 
 ```bash
 cd docker
 docker compose up -d
 ```
 
-**3. 查看日志**
+**4. 查看日志**
 
 ```bash
 docker compose logs -f
+```
+
+### Docker 网络说明
+
+容器通过 `host.docker.internal` 连接宿主机上的 MQTT Broker。如果宿主机 EMQX 未运行，需先启动：
+
+```bash
+docker run -d --name emqx -p 1883:1883 -p 8083:8083 -p 18083:18083 emqx/emqx:latest
 ```
 
 ### docker-compose 服务说明
@@ -151,7 +162,12 @@ docker compose logs -f
 | `opencode-mqtt` | 本地构建 | MQTT 代理服务 |
 | `opencode` | `ghcr.io/anomalyco/opencode:latest` | OpenCode AI Server |
 
-两个服务共享 `/opt/workspace` 卷作为工作目录。
+卷挂载：
+
+| 容器路径 | 宿主机路径 | 说明 |
+|---------|-----------|------|
+| `/opt/workspace` | `./workspace` | 共享工作目录 |
+| `/home/opencode/.config/opencode` | `./config` | OpenCode 配置持久化 |
 
 ## SSE 事件处理
 
@@ -188,4 +204,4 @@ docker compose logs -f
 
 - Node.js >= 20
 - MQTT Broker（如 EMQX、Mosquitto）
-- OpenCode Server（`opencode serve`）
+- OpenCode Server（`opencode serve --hostname 0.0.0.0 --port 4096`）

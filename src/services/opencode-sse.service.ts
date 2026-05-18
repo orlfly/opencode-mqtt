@@ -449,7 +449,10 @@ export class OpenCodeSSEService implements OnApplicationBootstrap, OnApplication
         cost,
       };
 
-      if (pendingSession.originalPayload.senderId) {
+      // 仅当原始消息使用 targetIds 指定接收者（群聊场景）时，回复才携带 targetIds
+      if (pendingSession.originalPayload.senderId &&
+          pendingSession.originalPayload.targetIds &&
+          pendingSession.originalPayload.targetIds.length > 0) {
         responseMessage.targetIds = [pendingSession.originalPayload.senderId];
       }
 
@@ -477,7 +480,10 @@ export class OpenCodeSSEService implements OnApplicationBootstrap, OnApplication
       type: result.type,
     };
 
-    if (pendingSession.originalPayload.senderId) {
+    // 仅当原始消息使用 targetIds 指定接收者（群聊场景）时，回复才携带 targetIds
+    if (pendingSession.originalPayload.senderId &&
+        pendingSession.originalPayload.targetIds &&
+        pendingSession.originalPayload.targetIds.length > 0) {
       intermediateMessage.targetIds = [pendingSession.originalPayload.senderId];
     }
 
@@ -520,7 +526,10 @@ export class OpenCodeSSEService implements OnApplicationBootstrap, OnApplication
       status: 'error',
     };
 
-    if (pendingSession.originalPayload.senderId) {
+    // 仅当原始消息使用 targetIds 指定接收者（群聊场景）时，回复才携带 targetIds
+    if (pendingSession.originalPayload.senderId &&
+        pendingSession.originalPayload.targetIds &&
+        pendingSession.originalPayload.targetIds.length > 0) {
       errorMessage.targetIds = [pendingSession.originalPayload.senderId];
     }
 

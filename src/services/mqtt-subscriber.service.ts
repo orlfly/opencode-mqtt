@@ -273,7 +273,8 @@ export class MqttSubscriberService implements OnApplicationBootstrap, OnApplicat
         status: 'error',
       };
 
-      if (payload.senderId) {
+      // 仅当原始消息使用 targetIds 指定接收者（群聊场景）时，回复才携带 targetIds
+      if (payload.senderId && payload.targetIds && Array.isArray(payload.targetIds) && payload.targetIds.length > 0) {
         errorMessage.targetIds = [payload.senderId];
       }
 
