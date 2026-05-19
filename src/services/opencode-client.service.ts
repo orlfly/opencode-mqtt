@@ -101,4 +101,32 @@ export class OpencodeClientService {
     const response = await fetch(`${this.baseUrl}/health`, { headers });
     return response;
   }
+
+  /**
+   * 回复权限请求
+   * @param requestID 权限请求ID
+   * @param reply once|always|reject
+   * @param message 可选的消息
+   */
+  async replyPermission(requestID: string, reply: 'once' | 'always' | 'reject', message?: string): Promise<any> {
+    this.logger.log(`Replying to permission request: ${requestID} => ${reply}`);
+
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (this.apiKey) {
+      headers['Authorization'] = `Bearer ${this.apiKey}`;
+    }
+
+    const res = await fetch(`${this.baseUrl}/permission/${requestID}/reply`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ reply, message }),
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Permission reply failed: ${res.status} ${text}`);
+    }
+
+    return true;
+  }
 }

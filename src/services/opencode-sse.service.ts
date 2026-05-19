@@ -161,6 +161,9 @@ export class OpenCodeSSEService implements OnApplicationBootstrap, OnApplication
       case 'session.diff':
         this.handleSessionDiff(event);
         break;
+      case 'permission.asked':
+        this.handlePermissionAsked(event);
+        break;
       case 'session.error':
         this.handleMessageError(event);
         break;
@@ -331,6 +334,38 @@ export class OpenCodeSSEService implements OnApplicationBootstrap, OnApplication
     this.resetInactivityTimer(sessionID);
 
     this.logger.debug(`Session ${sessionID} diff: ${diff?.length || 0} files changed`);
+  }
+
+  /**
+   * 处理权限请求事件 - 通过MQTT转发给客户端，由客户端决定是否授权
+   */
+  private handlePermissionAsked(event: any) {
+    const props = event.properties || {};
+    const { id: requestID, sessionID, permission, patterns } = props;
+
+    const pendingSession = this.pendingSessions.get(sessionID);
+    if (!pendingSession) {
+      return;
+    }
+
+    this.resetInactivityTimer(sessionID);
+
+    this.logger.log(`Permission requested: session=${sessionID}, requestID=${requestID}, permission=${permission}, patterns=${JSON.stringify(patterns)}`);
+
+    // 构造权限请求消息发送给客户端
+    const permissionMessage = {
+      id: requestID,
+      text: `OpenCode请求权限: ${permission} - ${(patterns || []).join(', ')}`,
+      senderId: this.configService.get('mqtt.clientId') || 'opencode-agent',
+      kind: 'permission_request',
+      ts: Date.now(),
+      sessionID,
+      requestID,
+      permission,
+      patterns,
+    };
+
+    this.sendMQTTMessage(pendingSession.replyToTopic, permissionMessage, pendingSession.userProperties);
   }
 
   private handleMessageError(event: any) {

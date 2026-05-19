@@ -197,6 +197,25 @@ export class MqttSubscriberService implements OnApplicationBootstrap, OnApplicat
     let recipient = payload.recipient || 'unknown';
     let message = '';
     let timestamp = payload.timestamp;
+
+    // 检测权限回复消息
+    if (payload.kind === 'permission_reply') {
+      const requestID = payload.requestID;
+      const reply = payload.reply as 'once' | 'always' | 'reject';
+      if (!requestID || !reply) {
+        this.logger.warn(`Invalid permission reply, missing requestID or reply: ${JSON.stringify(payload)}`);
+        return;
+      }
+      this.logger.log(`Processing permission reply: requestID=${requestID}, reply=${reply}`);
+      try {
+        await this.opencodeService.replyPermission(requestID, reply);
+        this.logger.log(`Permission reply sent successfully: requestID=${requestID}, reply=${reply}`);
+      } catch (error: any) {
+        this.logger.error(`Permission reply failed: ${error.message}`);
+      }
+      return;
+    }
+
     const messageType = payload.type || 'text';
 
     if (messageType === 'file') {

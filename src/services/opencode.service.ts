@@ -233,4 +233,11 @@ export class OpenCodeService {
       };
     }
   }
+
+  /**
+   * 回复权限请求
+   */
+  async replyPermission(requestID: string, reply: 'once' | 'always' | 'reject', message?: string): Promise<any> {
+    return this.opencodeClient.replyPermission(requestID, reply, message);
+  }
 }
