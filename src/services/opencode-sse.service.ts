@@ -164,6 +164,15 @@ export class OpenCodeSSEService implements OnApplicationBootstrap, OnApplication
       case 'permission.asked':
         this.handlePermissionAsked(event);
         break;
+      case 'question.asked':
+        this.handleQuestionAsked(event);
+        break;
+      case 'question.replied':
+        this.handleQuestionReplied(event);
+        break;
+      case 'question.rejected':
+        this.handleQuestionRejected(event);
+        break;
       case 'session.error':
         this.handleMessageError(event);
         break;
@@ -366,6 +375,80 @@ export class OpenCodeSSEService implements OnApplicationBootstrap, OnApplication
     };
 
     this.sendMQTTMessage(pendingSession.replyToTopic, permissionMessage, pendingSession.userProperties);
+  }
+
+  private handleQuestionAsked(event: any) {
+    const props = event.properties || {};
+    const { id: requestID, sessionID, questions, tool } = props;
+
+    const pendingSession = this.pendingSessions.get(sessionID);
+    if (!pendingSession) {
+      return;
+    }
+
+    this.resetInactivityTimer(sessionID);
+
+    this.logger.log(`Question asked: session=${sessionID}, requestID=${requestID}, questions count=${questions?.length || 0}`);
+
+    const questionMessage = {
+      id: requestID,
+      text: questions?.[0]?.question || 'OpenCode 需要你的确认',
+      senderId: this.configService.get('mqtt.clientId') || 'opencode-agent',
+      kind: 'question',
+      ts: Date.now(),
+      sessionID,
+      requestID,
+      questions,
+      tool,
+    };
+
+    this.sendMQTTMessage(pendingSession.replyToTopic, questionMessage, pendingSession.userProperties);
+  }
+
+  private handleQuestionReplied(event: any) {
+    const props = event.properties || {};
+    const { requestID, sessionID } = props;
+
+    this.logger.log(`Question replied: requestID=${requestID}`);
+
+    const pendingSession = sessionID ? this.pendingSessions.get(sessionID) : null;
+    if (!pendingSession) return;
+
+    this.resetInactivityTimer(sessionID);
+
+    const repliedMessage = {
+      id: requestID,
+      text: '问题已回答，AI 继续处理中',
+      senderId: this.configService.get('mqtt.clientId') || 'opencode-agent',
+      kind: 'question_replied',
+      ts: Date.now(),
+      requestID,
+    };
+
+    this.sendMQTTMessage(pendingSession.replyToTopic, repliedMessage, pendingSession.userProperties);
+  }
+
+  private handleQuestionRejected(event: any) {
+    const props = event.properties || {};
+    const { requestID, sessionID } = props;
+
+    this.logger.log(`Question rejected: requestID=${requestID}`);
+
+    const pendingSession = sessionID ? this.pendingSessions.get(sessionID) : null;
+    if (!pendingSession) return;
+
+    this.resetInactivityTimer(sessionID);
+
+    const rejectedMessage = {
+      id: requestID,
+      text: '问题被拒绝',
+      senderId: this.configService.get('mqtt.clientId') || 'opencode-agent',
+      kind: 'question_rejected',
+      ts: Date.now(),
+      requestID,
+    };
+
+    this.sendMQTTMessage(pendingSession.replyToTopic, rejectedMessage, pendingSession.userProperties);
   }
 
   private handleMessageError(event: any) {

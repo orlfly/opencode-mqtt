@@ -129,4 +129,53 @@ export class OpencodeClientService {
 
     return true;
   }
+
+  /**
+   * 回答 AI 提问
+   * @param requestID 提问请求ID
+   * @param answers 每个问题的答案列表（数组的数组）
+   */
+  async answerQuestion(requestID: string, answers: Array<Array<string>>): Promise<void> {
+    this.logger.log(`Answering question: ${requestID}`);
+
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (this.apiKey) {
+      headers['Authorization'] = `Bearer ${this.apiKey}`;
+    }
+
+    const res = await fetch(`${this.baseUrl}/question/${requestID}/reply`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ answers }),
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Question reply failed: ${res.status} ${text}`);
+    }
+  }
+
+  /**
+   * 拒绝回答 AI 提问
+   * @param requestID 提问请求ID
+   */
+  async rejectQuestion(requestID: string): Promise<void> {
+    this.logger.log(`Rejecting question: ${requestID}`);
+
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (this.apiKey) {
+      headers['Authorization'] = `Bearer ${this.apiKey}`;
+    }
+
+    const res = await fetch(`${this.baseUrl}/question/${requestID}/reject`, {
+      method: 'POST',
+      headers,
+      body: '{}',
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Question reject failed: ${res.status} ${text}`);
+    }
+  }
 }

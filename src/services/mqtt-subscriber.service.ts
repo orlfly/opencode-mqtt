@@ -3,6 +3,7 @@ import { MqttClient, connect } from 'mqtt';
 import { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { OpenCodeService } from './opencode.service.js';
+import { OpencodeClientService } from './opencode-client.service.js';
 import { OpenCodeSSEService } from './opencode-sse.service.js';
 import { SessionManagerService } from './session-manager.service.js';
 import { MqttMessage } from '../interfaces/mqtt-message.interface.js';
@@ -17,6 +18,7 @@ export class MqttSubscriberService implements OnApplicationBootstrap, OnApplicat
   constructor(
     private configService: ConfigService,
     private opencodeService: OpenCodeService,
+    private opencodeClient: OpencodeClientService,
     private sseService: OpenCodeSSEService,
     private sessionManager: SessionManagerService,
     private eventEmitter: EventEmitter2,
@@ -123,6 +125,20 @@ export class MqttSubscriberService implements OnApplicationBootstrap, OnApplicat
           if (kind === 'dismissed') {
             this.handleGroupDismiss(payload, packet).catch(error => {
               this.logger.error(`Error handling group dismiss: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            });
+            return;
+          }
+
+          if (kind === 'question_answer') {
+            this.handleQuestionAnswer(payload, packet).catch(error => {
+              this.logger.error(`Error handling question answer: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            });
+            return;
+          }
+
+          if (kind === 'permission_reply') {
+            this.handlePermissionReply(payload, packet).catch(error => {
+              this.logger.error(`Error handling permission reply: ${error instanceof Error ? error.message : 'Unknown error'}`);
             });
             return;
           }
@@ -363,6 +379,57 @@ export class MqttSubscriberService implements OnApplicationBootstrap, OnApplicat
       }
       this.logger.log(`Unsubscribed from group topic: ${groupTopic}`);
     });
+  }
+
+  private async handleQuestionAnswer(payload: any, packet?: any) {
+    const { requestID, answers, reject } = payload;
+
+    if (!requestID) {
+      this.logger.warn('Question answer message missing requestID');
+      return;
+    }
+
+    if (reject) {
+      this.logger.log(`Rejecting question: requestID=${requestID}`);
+      try {
+        await this.opencodeClient.rejectQuestion(requestID);
+        this.logger.log(`Question rejected: ${requestID}`);
+      } catch (error: any) {
+        this.logger.error(`Failed to reject question: ${error.message}`);
+      }
+      return;
+    }
+
+    this.logger.log(`Answering question: requestID=${requestID}`);
+    try {
+      await this.opencodeClient.answerQuestion(requestID, answers || []);
+      this.logger.log(`Question answer submitted: ${requestID}`);
+    } catch (error: any) {
+      this.logger.error(`Failed to submit question answer: ${error.message}`);
+    }
+  }
+
+  private async handlePermissionReply(payload: any, packet?: any) {
+    const { requestID, reply, message } = payload;
+
+    if (!requestID || !reply) {
+      this.logger.warn('Permission reply missing requestID or reply');
+      return;
+    }
+
+    if (!['once', 'always', 'reject'].includes(reply)) {
+      this.logger.warn(`Invalid permission reply: ${reply}`);
+      return;
+    }
+
+    this.logger.log(`Received permission reply: requestID=${requestID}, reply=${reply}`);
+
+    try {
+      await this.opencodeClient.replyPermission(requestID, reply, message);
+      this.logger.log(`Permission reply submitted: ${requestID} => ${reply}`);
+    } catch (error: any) {
+      this.logger.error(`Failed to submit permission reply: ${error.message}`);
+    }
   }
 
   private async handleGroupMessage(topic: string, payload: any, packet?: any) {
